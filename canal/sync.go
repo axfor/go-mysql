@@ -156,7 +156,6 @@ func (c *Canal) runSyncBinlog() error {
 					next, err := handler(ev, e, stmt, pos, &savePos, &force)
 					if err != nil {
 						c.cfg.Logger.Errorf("handle query event(%s) err %v", e.Query, err)
-						continue
 					}
 					if !next {
 						continue

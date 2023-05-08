@@ -303,7 +303,7 @@ func parseCreateUserStmt(stmt ast.StmtNode) (ns []*CreateUser) {
 					AuthPlugin:   s.AuthOpt.AuthPlugin,
 				}
 			}
-			ss.IsRole = ss.IsRole
+			ss.IsRole = s.IsRole
 			user.Specs = append(user.Specs, ss)
 		}
 
@@ -496,7 +496,7 @@ func parseGrantStmt(stmt ast.StmtNode) (ns []*Grant) {
 					AuthPlugin:   s.AuthOpt.AuthPlugin,
 				}
 			}
-			ss.IsRole = ss.IsRole
+			ss.IsRole = s.IsRole
 			grant.Users = append(grant.Users, ss)
 		}
 

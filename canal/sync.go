@@ -142,21 +142,22 @@ func (c *Canal) runSyncBinlog() error {
 				continue
 			}
 			for _, stmt := range stmts {
-				nodes := parseStmt(stmt)
-				for _, node := range nodes {
-					if node.db == "" {
-						node.db = string(e.Schema)
-					}
-					if err = c.updateTable(ev.Header, node.db, node.table); err != nil {
-						return errors.Trace(err)
-					}
+
+				handlerSet := []queryEventHandler{
+					c.handleTableEvent,
+					c.handleCreateUserEvent,
+					c.handleDropUserEvent,
+					c.handleUnknownQueryEvent, // last handler
 				}
-				if len(nodes) > 0 {
-					savePos = true
-					force = true
-					// Now we only handle Table Changed DDL, maybe we will support more later.
-					if err = c.eventHandler.OnDDL(ev.Header, pos, e); err != nil {
-						return errors.Trace(err)
+
+				for _, handler := range handlerSet {
+					next, err := handler(ev, e, stmt, pos, &savePos, &force)
+					if err != nil {
+						c.cfg.Logger.Errorf("handle query event(%s) err %v", e.Query, err)
+						continue
+					}
+					if !next {
+						continue
 					}
 				}
 			}
@@ -219,6 +220,148 @@ func parseStmt(stmt ast.StmtNode) (ns []*node) {
 			table: t.Table.Name.String(),
 		}
 		ns = []*node{n}
+	}
+	return ns
+}
+
+// CreateUser is used for parsing create user statement.
+type CreateUser struct {
+	IsCreateRole          bool
+	IfNotExists           bool
+	Specs                 []*UserSpec
+	TLSOptions            []*TLSOption
+	ResourceOptions       []*ResourceOption
+	PasswordOrLockOptions []*PasswordOrLockOption
+}
+
+// UserSpec is used for parsing create user statement.
+type UserSpec struct {
+	User    *UserIdentity
+	AuthOpt *AuthOption
+	IsRole  bool
+}
+
+// UserIdentity represents username and hostname.
+type UserIdentity struct {
+	Username     string
+	Hostname     string
+	CurrentUser  bool
+	AuthUsername string // Username matched in privileges system
+	AuthHostname string // Match in privs system (i.e. could be a wildcard)
+}
+
+// AuthOption is used for parsing create use statement.
+type AuthOption struct {
+	// ByAuthString set as true, if AuthString is used for authorization. Otherwise, authorization is done by HashString.
+	ByAuthString bool
+	AuthString   string
+	HashString   string
+	AuthPlugin   string
+}
+
+type TLSOption struct {
+	Type  int
+	Value string
+}
+
+type ResourceOption struct {
+	Type  int
+	Count int64
+}
+
+type PasswordOrLockOption struct {
+	Type  int
+	Count int64
+}
+
+func parseCreateUserStmt(stmt ast.StmtNode) (ns []*CreateUser) {
+	switch t := stmt.(type) {
+	case *ast.CreateUserStmt:
+		user := &CreateUser{}
+		user.IsCreateRole = t.IsCreateRole
+		user.IfNotExists = t.IfNotExists
+
+		user.Specs = make([]*UserSpec, 0, len(t.Specs))
+		for _, s := range t.Specs {
+			ss := &UserSpec{}
+			if s.User != nil {
+				ss.User = &UserIdentity{
+					Username:     s.User.Username,
+					Hostname:     s.User.Hostname,
+					CurrentUser:  s.User.CurrentUser,
+					AuthUsername: s.User.AuthUsername,
+					AuthHostname: s.User.AuthHostname,
+				}
+			}
+			if s.AuthOpt != nil {
+				ss.AuthOpt = &AuthOption{
+					ByAuthString: s.AuthOpt.ByAuthString,
+					AuthString:   s.AuthOpt.AuthString,
+					HashString:   s.AuthOpt.HashString,
+					AuthPlugin:   s.AuthOpt.AuthPlugin,
+				}
+			}
+			ss.IsRole = ss.IsRole
+			user.Specs = append(user.Specs, ss)
+		}
+
+		user.TLSOptions = make([]*TLSOption, 0, len(t.TLSOptions))
+		for _, t := range t.TLSOptions {
+			tt := &TLSOption{
+				Type:  t.Type,
+				Value: t.Value,
+			}
+			user.TLSOptions = append(user.TLSOptions, tt)
+		}
+
+		user.ResourceOptions = make([]*ResourceOption, 0, len(t.ResourceOptions))
+		for _, r := range t.ResourceOptions {
+			rr := &ResourceOption{
+				Type:  r.Type,
+				Count: r.Count,
+			}
+			user.ResourceOptions = append(user.ResourceOptions, rr)
+		}
+		user.PasswordOrLockOptions = make([]*PasswordOrLockOption, 0, len(t.PasswordOrLockOptions))
+		for _, p := range t.PasswordOrLockOptions {
+			pp := &PasswordOrLockOption{
+				Type:  p.Type,
+				Count: p.Count,
+			}
+			user.PasswordOrLockOptions = append(user.PasswordOrLockOptions, pp)
+		}
+		ns = append(ns, user)
+	}
+	return ns
+}
+
+type DropUser struct {
+	IfExists   bool
+	IsDropRole bool
+	UserList   []*UserIdentity
+}
+
+func parseDropUserStmt(stmt ast.StmtNode) (ns []*DropUser) {
+	switch t := stmt.(type) {
+	case *ast.DropUserStmt:
+		user := &DropUser{
+			IfExists:   t.IfExists,
+			IsDropRole: t.IsDropRole,
+		}
+		user.UserList = make([]*UserIdentity, 0, len(t.UserList))
+		for _, u := range t.UserList {
+			uu := &UserIdentity{
+				Username:     u.Username,
+				Hostname:     u.Hostname,
+				CurrentUser:  u.CurrentUser,
+				AuthUsername: u.AuthUsername,
+				AuthHostname: u.AuthHostname,
+			}
+
+			user.UserList = append(user.UserList, uu)
+		}
+
+		ns = append(ns, user)
 	}
 	return ns
 }
@@ -335,4 +478,73 @@ func (c *Canal) CatchMasterPos(timeout time.Duration) error {
 	}
 
 	return c.WaitUntilPos(pos, timeout)
+}
+
+type queryEventHandler func(*replication.BinlogEvent, *replication.QueryEvent,
+	ast.StmtNode, mysql.Position, *bool, *bool) (bool, error)
+
+func (c *Canal) handleTableEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
+	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) (bool, error) {
+	next := true
+	nodes := parseStmt(stmt)
+	for _, node := range nodes {
+		if node.db == "" {
+			node.db = string(e.Schema)
+		}
+		next = false
+		if err := c.updateTable(ev.Header, node.db, node.table); err != nil {
+			return next, errors.Trace(err)
+		}
+	}
+	if len(nodes) > 0 {
+		*savePos = true
+		*force = true
+		next = false
+		// Now we only handle Table Changed DDL, maybe we will support more later.
+		if err := c.eventHandler.OnDDL(ev.Header, pos, e); err != nil {
+			return next, errors.Trace(err)
+		}
+	}
+	return next, nil
+}
+
+func (c *Canal) handleCreateUserEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
+	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) (bool, error) {
+	next := true
+	users := parseCreateUserStmt(stmt)
+	for _, user := range users {
+		*savePos = true
+		*force = true
+		next = false
+		if err := c.eventHandler.OnCreateUser(e, user); err != nil {
+			return next, errors.Trace(err)
+		}
+	}
+
+	return next, nil
+}
+
+func (c *Canal) handleDropUserEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
+	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) (bool, error) {
+	next := true
+	users := parseDropUserStmt(stmt)
+	for _, user := range users {
+		*savePos = true
+		*force = true
+		next = false
+		if err := c.eventHandler.OnDropUser(e, user); err != nil {
+			return next, errors.Trace(err)
+		}
+	}
+
+	return next, nil
+}
+
+func (c *Canal) handleUnknownQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
+	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) (bool, error) {
+	next := false
+	if err := c.eventHandler.OnQueryEvent(ev.Header, e); err != nil {
+		return next, errors.Trace(err)
+	}
+	return next, nil
 }

@@ -21,7 +21,9 @@ type EventHandler interface {
 	OnCreateUser(queryEvent *replication.QueryEvent, user *CreateUser) error
 	// OnDropUser is the drop user event in QueryEvent
 	OnDropUser(queryEvent *replication.QueryEvent, user *DropUser) error
-	// OnQueryEvent is query event (Note: Exclude OnCreateUser and OnDropUser)
+	// OnGrant is the grant event in QueryEvent
+	OnGrant(queryEvent *replication.QueryEvent, grant *Grant) error
+	// OnQueryEvent is query event (Note: Exclude OnCreateUser and OnDropUser and OnGrant)
 	OnQueryEvent(header *replication.EventHeader, queryEvent *replication.QueryEvent) error
 	String() string
 }
@@ -48,6 +50,9 @@ func (h *DummyEventHandler) OnCreateUser(*replication.QueryEvent, *CreateUser) e
 	return nil
 }
 func (h *DummyEventHandler) OnDropUser(*replication.QueryEvent, *DropUser) error {
+	return nil
+}
+func (h *DummyEventHandler) OnGrant(*replication.QueryEvent, *Grant) error {
 	return nil
 }
 func (h *DummyEventHandler) OnQueryEvent(*replication.EventHeader, *replication.QueryEvent) error {

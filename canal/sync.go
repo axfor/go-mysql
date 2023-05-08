@@ -143,7 +143,6 @@ func (c *Canal) runSyncBinlog() error {
 				continue
 			}
 			for _, stmt := range stmts {
-
 				handlerSet := []queryEventHandler{
 					c.handleTableEvent,
 					c.handleCreateUserEvent,
@@ -151,15 +150,13 @@ func (c *Canal) runSyncBinlog() error {
 					c.handleGrantEvent,
 					c.handleUnknownQueryEvent, // last handler
 				}
-
 				for _, handler := range handlerSet {
 					next, err := handler(ev, e, stmt, pos, &savePos, &force)
 					if err != nil {
 						c.cfg.Logger.Errorf("handle query event(%s) err %v", e.Query, err)
-						continue
 					}
 					if !next {
-						continue
+						break
 					}
 				}
 			}

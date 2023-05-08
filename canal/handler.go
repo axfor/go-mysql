@@ -17,6 +17,12 @@ type EventHandler interface {
 	OnGTID(header *replication.EventHeader, gtid mysql.GTIDSet) error
 	// OnPosSynced Use your own way to sync position. When force is true, sync position immediately.
 	OnPosSynced(header *replication.EventHeader, pos mysql.Position, set mysql.GTIDSet, force bool) error
+	// OnCreateUser is the create user event in QueryEvent
+	OnCreateUser(queryEvent *replication.QueryEvent, user *CreateUser) error
+	// OnDropUser is the drop user event in QueryEvent
+	OnDropUser(queryEvent *replication.QueryEvent, user *DropUser) error
+	// OnQueryEvent is query event (Note: Exclude OnCreateUser and OnDropUser)
+	OnQueryEvent(header *replication.EventHeader, queryEvent *replication.QueryEvent) error
 	String() string
 }
 
@@ -38,7 +44,15 @@ func (h *DummyEventHandler) OnGTID(*replication.EventHeader, mysql.GTIDSet) erro
 func (h *DummyEventHandler) OnPosSynced(*replication.EventHeader, mysql.Position, mysql.GTIDSet, bool) error {
 	return nil
 }
-
+func (h *DummyEventHandler) OnCreateUser(*replication.QueryEvent, *CreateUser) error {
+	return nil
+}
+func (h *DummyEventHandler) OnDropUser(*replication.QueryEvent, *DropUser) error {
+	return nil
+}
+func (h *DummyEventHandler) OnQueryEvent(*replication.EventHeader, *replication.QueryEvent) error {
+	return nil
+}
 func (h *DummyEventHandler) String() string { return "DummyEventHandler" }
 
 // `SetEventHandler` registers the sync handler, you must register your

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/parser/ast"
+	pMysql "github.com/pingcap/tidb/parser/mysql"
 )
 
 func (c *Canal) startSyncer() (*replication.BinlogStreamer, error) {
@@ -147,6 +148,7 @@ func (c *Canal) runSyncBinlog() error {
 					c.handleTableEvent,
 					c.handleCreateUserEvent,
 					c.handleDropUserEvent,
+					c.handleGrantEvent,
 					c.handleUnknownQueryEvent, // last handler
 				}
 
@@ -335,6 +337,7 @@ func parseCreateUserStmt(stmt ast.StmtNode) (ns []*CreateUser) {
 	return ns
 }
 
+// DropUser creates user account.
 type DropUser struct {
 	IfExists   bool
 	IsDropRole bool
@@ -362,6 +365,153 @@ func parseDropUserStmt(stmt ast.StmtNode) (ns []*DropUser) {
 		}
 
 		ns = append(ns, user)
+	}
+	return ns
+}
+
+// PrivilegeType privilege
+type PrivilegeType pMysql.PrivilegeType
+
+func (p PrivilegeType) String() string {
+	return pMysql.PrivilegeType(p).String()
+}
+
+func (p PrivilegeType) ColumnString() string {
+	return pMysql.PrivilegeType(p).ColumnString()
+}
+
+func (p PrivilegeType) SetString() string {
+	return pMysql.PrivilegeType(p).SetString()
+}
+
+// ObjectTypeType is the type for object type.
+type ObjectTypeType int
+
+// GrantLevelType is the type for grant level.
+type GrantLevelType int
+
+// Grant is the struct for GRANT statement.
+type Grant struct {
+	Privs      []*PrivElem
+	ObjectType ObjectTypeType
+	Level      *GrantLevel
+	Users      []*UserSpec
+	TLSOptions []*TLSOption
+	WithGrant  bool
+}
+
+// PrivElem is the privilege type and optional column list.
+type PrivElem struct {
+	//node
+
+	Priv PrivilegeType
+	Cols []*ColumnName
+	Name string
+}
+
+// ColumnName represents column name.
+type ColumnName struct {
+	//node
+
+	Schema CIStr
+	Table  CIStr
+	Name   CIStr
+}
+
+type CIStr struct {
+	O string `json:"O"` // Original string.
+	L string `json:"L"` // Lower case string.
+}
+
+// String implements fmt.Stringer interface.
+func (cis CIStr) String() string {
+	return cis.O
+}
+
+// GrantLevel is used for store the privilege scope.
+type GrantLevel struct {
+	Level     GrantLevelType
+	DBName    string
+	TableName string
+}
+
+func parseGrantStmt(stmt ast.StmtNode) (ns []*Grant) {
+	switch t := stmt.(type) {
+	case *ast.GrantStmt:
+		grant := &Grant{}
+
+		grant.Privs = make([]*PrivElem, 0, len(t.Privs))
+		for _, p := range t.Privs {
+			pp := &PrivElem{}
+			pp.Priv = PrivilegeType(p.Priv)
+			pp.Cols = make([]*ColumnName, 0, len(p.Cols))
+			for _, c := range p.Cols {
+				cc := &ColumnName{
+					Schema: CIStr{
+						O: c.Schema.O,
+						L: c.Schema.L,
+					},
+					Table: CIStr{
+						O: c.Table.O,
+						L: c.Table.L,
+					},
+					Name: CIStr{
+						O: c.Name.O,
+						L: c.Name.L,
+					},
+				}
+				pp.Cols = append(pp.Cols, cc)
+			}
+			pp.Name = p.Name
+			grant.Privs = append(grant.Privs, pp)
+		}
+
+		grant.ObjectType = ObjectTypeType(t.ObjectType)
+
+		if t.Level != nil {
+			grant.Level = &GrantLevel{
+				Level:     GrantLevelType(t.Level.Level),
+				DBName:    t.Level.DBName,
+				TableName: t.Level.TableName,
+			}
+		}
+
+		grant.Users = make([]*UserSpec, 0, len(t.Users))
+		for _, s := range t.Users {
+			ss := &UserSpec{}
+			if s.User != nil {
+				ss.User = &UserIdentity{
+					Username:     s.User.Username,
+					Hostname:     s.User.Hostname,
+					CurrentUser:  s.User.CurrentUser,
+					AuthUsername: s.User.AuthUsername,
+					AuthHostname: s.User.AuthHostname,
+				}
+			}
+			if s.AuthOpt != nil {
+				ss.AuthOpt = &AuthOption{
+					ByAuthString: s.AuthOpt.ByAuthString,
+					AuthString:   s.AuthOpt.AuthString,
+					HashString:   s.AuthOpt.HashString,
+					AuthPlugin:   s.AuthOpt.AuthPlugin,
+				}
+			}
+			ss.IsRole = ss.IsRole
+			grant.Users = append(grant.Users, ss)
+		}
+
+		grant.TLSOptions = make([]*TLSOption, 0, len(t.TLSOptions))
+		for _, t := range t.TLSOptions {
+			tt := &TLSOption{
+				Type:  t.Type,
+				Value: t.Value,
+			}
+			grant.TLSOptions = append(grant.TLSOptions, tt)
+		}
+
+		grant.WithGrant = t.WithGrant
+
+		ns = append(ns, grant)
 	}
 	return ns
 }
@@ -533,6 +683,22 @@ func (c *Canal) handleDropUserEvent(ev *replication.BinlogEvent, e *replication.
 		*force = true
 		next = false
 		if err := c.eventHandler.OnDropUser(e, user); err != nil {
+			return next, errors.Trace(err)
+		}
+	}
+
+	return next, nil
+}
+
+func (c *Canal) handleGrantEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
+	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) (bool, error) {
+	next := true
+	grants := parseGrantStmt(stmt)
+	for _, grant := range grants {
+		*savePos = true
+		*force = true
+		next = false
+		if err := c.eventHandler.OnGrant(e, grant); err != nil {
 			return next, errors.Trace(err)
 		}
 	}

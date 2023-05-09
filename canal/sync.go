@@ -143,21 +143,9 @@ func (c *Canal) runSyncBinlog() error {
 				continue
 			}
 			for _, stmt := range stmts {
-				handlerSet := []queryEventHandler{
-					c.handleTableEvent,
-					c.handleCreateUserEvent,
-					c.handleDropUserEvent,
-					c.handleGrantEvent,
-					c.handleUnknownQueryEvent, // last handler
-				}
-				for _, handler := range handlerSet {
-					next, err := handler(ev, e, stmt, pos, &savePos, &force)
-					if err != nil {
-						c.cfg.Logger.Errorf("handle query event(%s) err %v", e.Query, err)
-					}
-					if !next {
-						break
-					}
+				err := c.handleQueryEvent(ev, e, stmt, pos, &savePos, &force)
+				if err != nil {
+					c.cfg.Logger.Errorf("handle query event(%s) err %v", e.Query, err)
 				}
 			}
 			if savePos && e.GSet != nil {
@@ -273,64 +261,62 @@ type PasswordOrLockOption struct {
 	Count int64
 }
 
-func parseCreateUserStmt(stmt ast.StmtNode) (ns []*CreateUser) {
-	switch t := stmt.(type) {
-	case *ast.CreateUserStmt:
-		user := &CreateUser{}
-		user.IsCreateRole = t.IsCreateRole
-		user.IfNotExists = t.IfNotExists
+func parseCreateUserStmt(stmt *ast.CreateUserStmt) (ns []*CreateUser) {
+	user := &CreateUser{}
+	user.IsCreateRole = stmt.IsCreateRole
+	user.IfNotExists = stmt.IfNotExists
 
-		user.Specs = make([]*UserSpec, 0, len(t.Specs))
-		for _, s := range t.Specs {
-			ss := &UserSpec{}
-			if s.User != nil {
-				ss.User = &UserIdentity{
-					Username:     s.User.Username,
-					Hostname:     s.User.Hostname,
-					CurrentUser:  s.User.CurrentUser,
-					AuthUsername: s.User.AuthUsername,
-					AuthHostname: s.User.AuthHostname,
-				}
+	user.Specs = make([]*UserSpec, 0, len(stmt.Specs))
+	for _, s := range stmt.Specs {
+		ss := &UserSpec{}
+		if s.User != nil {
+			ss.User = &UserIdentity{
+				Username:     s.User.Username,
+				Hostname:     s.User.Hostname,
+				CurrentUser:  s.User.CurrentUser,
+				AuthUsername: s.User.AuthUsername,
+				AuthHostname: s.User.AuthHostname,
 			}
-			if s.AuthOpt != nil {
-				ss.AuthOpt = &AuthOption{
-					ByAuthString: s.AuthOpt.ByAuthString,
-					AuthString:   s.AuthOpt.AuthString,
-					HashString:   s.AuthOpt.HashString,
-					AuthPlugin:   s.AuthOpt.AuthPlugin,
-				}
-			}
-			ss.IsRole = s.IsRole
-			user.Specs = append(user.Specs, ss)
 		}
-
-		user.TLSOptions = make([]*TLSOption, 0, len(t.TLSOptions))
-		for _, t := range t.TLSOptions {
-			tt := &TLSOption{
-				Type:  t.Type,
-				Value: t.Value,
+		if s.AuthOpt != nil {
+			ss.AuthOpt = &AuthOption{
+				ByAuthString: s.AuthOpt.ByAuthString,
+				AuthString:   s.AuthOpt.AuthString,
+				HashString:   s.AuthOpt.HashString,
+				AuthPlugin:   s.AuthOpt.AuthPlugin,
 			}
-			user.TLSOptions = append(user.TLSOptions, tt)
 		}
-
-		user.ResourceOptions = make([]*ResourceOption, 0, len(t.ResourceOptions))
-		for _, r := range t.ResourceOptions {
-			rr := &ResourceOption{
-				Type:  r.Type,
-				Count: r.Count,
-			}
-			user.ResourceOptions = append(user.ResourceOptions, rr)
-		}
-		user.PasswordOrLockOptions = make([]*PasswordOrLockOption, 0, len(t.PasswordOrLockOptions))
-		for _, p := range t.PasswordOrLockOptions {
-			pp := &PasswordOrLockOption{
-				Type:  p.Type,
-				Count: p.Count,
-			}
-			user.PasswordOrLockOptions = append(user.PasswordOrLockOptions, pp)
-		}
-		ns = append(ns, user)
+		ss.IsRole = s.IsRole
+		user.Specs = append(user.Specs, ss)
 	}
+
+	user.TLSOptions = make([]*TLSOption, 0, len(stmt.TLSOptions))
+	for _, t := range stmt.TLSOptions {
+		tt := &TLSOption{
+			Type:  t.Type,
+			Value: t.Value,
+		}
+		user.TLSOptions = append(user.TLSOptions, tt)
+	}
+
+	user.ResourceOptions = make([]*ResourceOption, 0, len(stmt.ResourceOptions))
+	for _, r := range stmt.ResourceOptions {
+		rr := &ResourceOption{
+			Type:  r.Type,
+			Count: r.Count,
+		}
+		user.ResourceOptions = append(user.ResourceOptions, rr)
+	}
+	user.PasswordOrLockOptions = make([]*PasswordOrLockOption, 0, len(stmt.PasswordOrLockOptions))
+	for _, p := range stmt.PasswordOrLockOptions {
+		pp := &PasswordOrLockOption{
+			Type:  p.Type,
+			Count: p.Count,
+		}
+		user.PasswordOrLockOptions = append(user.PasswordOrLockOptions, pp)
+	}
+	ns = append(ns, user)
+
 	return ns
 }
 
@@ -341,28 +327,24 @@ type DropUser struct {
 	UserList   []*UserIdentity
 }
 
-func parseDropUserStmt(stmt ast.StmtNode) (ns []*DropUser) {
-	switch t := stmt.(type) {
-	case *ast.DropUserStmt:
-		user := &DropUser{
-			IfExists:   t.IfExists,
-			IsDropRole: t.IsDropRole,
-		}
-		user.UserList = make([]*UserIdentity, 0, len(t.UserList))
-		for _, u := range t.UserList {
-			uu := &UserIdentity{
-				Username:     u.Username,
-				Hostname:     u.Hostname,
-				CurrentUser:  u.CurrentUser,
-				AuthUsername: u.AuthUsername,
-				AuthHostname: u.AuthHostname,
-			}
-
-			user.UserList = append(user.UserList, uu)
-		}
-
-		ns = append(ns, user)
+func parseDropUserStmt(stmt *ast.DropUserStmt) (ns []*DropUser) {
+	user := &DropUser{
+		IfExists:   stmt.IfExists,
+		IsDropRole: stmt.IsDropRole,
 	}
+	user.UserList = make([]*UserIdentity, 0, len(stmt.UserList))
+	for _, u := range stmt.UserList {
+		uu := &UserIdentity{
+			Username:     u.Username,
+			Hostname:     u.Hostname,
+			CurrentUser:  u.CurrentUser,
+			AuthUsername: u.AuthUsername,
+			AuthHostname: u.AuthHostname,
+		}
+
+		user.UserList = append(user.UserList, uu)
+	}
+	ns = append(ns, user)
 	return ns
 }
 
@@ -432,84 +414,74 @@ type GrantLevel struct {
 	TableName string
 }
 
-func parseGrantStmt(stmt ast.StmtNode) (ns []*Grant) {
-	switch t := stmt.(type) {
-	case *ast.GrantStmt:
-		grant := &Grant{}
-
-		grant.Privs = make([]*PrivElem, 0, len(t.Privs))
-		for _, p := range t.Privs {
-			pp := &PrivElem{}
-			pp.Priv = PrivilegeType(p.Priv)
-			pp.Cols = make([]*ColumnName, 0, len(p.Cols))
-			for _, c := range p.Cols {
-				cc := &ColumnName{
-					Schema: CIStr{
-						O: c.Schema.O,
-						L: c.Schema.L,
-					},
-					Table: CIStr{
-						O: c.Table.O,
-						L: c.Table.L,
-					},
-					Name: CIStr{
-						O: c.Name.O,
-						L: c.Name.L,
-					},
-				}
-				pp.Cols = append(pp.Cols, cc)
+func parseGrantStmt(stmt *ast.GrantStmt) (ns []*Grant) {
+	grant := &Grant{}
+	grant.Privs = make([]*PrivElem, 0, len(stmt.Privs))
+	for _, p := range stmt.Privs {
+		pp := &PrivElem{}
+		pp.Priv = PrivilegeType(p.Priv)
+		pp.Cols = make([]*ColumnName, 0, len(p.Cols))
+		for _, c := range p.Cols {
+			cc := &ColumnName{
+				Schema: CIStr{
+					O: c.Schema.O,
+					L: c.Schema.L,
+				},
+				Table: CIStr{
+					O: c.Table.O,
+					L: c.Table.L,
+				},
+				Name: CIStr{
+					O: c.Name.O,
+					L: c.Name.L,
+				},
 			}
-			pp.Name = p.Name
-			grant.Privs = append(grant.Privs, pp)
+			pp.Cols = append(pp.Cols, cc)
 		}
-
-		grant.ObjectType = ObjectTypeType(t.ObjectType)
-
-		if t.Level != nil {
-			grant.Level = &GrantLevel{
-				Level:     GrantLevelType(t.Level.Level),
-				DBName:    t.Level.DBName,
-				TableName: t.Level.TableName,
-			}
-		}
-
-		grant.Users = make([]*UserSpec, 0, len(t.Users))
-		for _, s := range t.Users {
-			ss := &UserSpec{}
-			if s.User != nil {
-				ss.User = &UserIdentity{
-					Username:     s.User.Username,
-					Hostname:     s.User.Hostname,
-					CurrentUser:  s.User.CurrentUser,
-					AuthUsername: s.User.AuthUsername,
-					AuthHostname: s.User.AuthHostname,
-				}
-			}
-			if s.AuthOpt != nil {
-				ss.AuthOpt = &AuthOption{
-					ByAuthString: s.AuthOpt.ByAuthString,
-					AuthString:   s.AuthOpt.AuthString,
-					HashString:   s.AuthOpt.HashString,
-					AuthPlugin:   s.AuthOpt.AuthPlugin,
-				}
-			}
-			ss.IsRole = s.IsRole
-			grant.Users = append(grant.Users, ss)
-		}
-
-		grant.TLSOptions = make([]*TLSOption, 0, len(t.TLSOptions))
-		for _, t := range t.TLSOptions {
-			tt := &TLSOption{
-				Type:  t.Type,
-				Value: t.Value,
-			}
-			grant.TLSOptions = append(grant.TLSOptions, tt)
-		}
-
-		grant.WithGrant = t.WithGrant
-
-		ns = append(ns, grant)
+		pp.Name = p.Name
+		grant.Privs = append(grant.Privs, pp)
 	}
+	grant.ObjectType = ObjectTypeType(stmt.ObjectType)
+	if stmt.Level != nil {
+		grant.Level = &GrantLevel{
+			Level:     GrantLevelType(stmt.Level.Level),
+			DBName:    stmt.Level.DBName,
+			TableName: stmt.Level.TableName,
+		}
+	}
+	grant.Users = make([]*UserSpec, 0, len(stmt.Users))
+	for _, s := range stmt.Users {
+		ss := &UserSpec{}
+		if s.User != nil {
+			ss.User = &UserIdentity{
+				Username:     s.User.Username,
+				Hostname:     s.User.Hostname,
+				CurrentUser:  s.User.CurrentUser,
+				AuthUsername: s.User.AuthUsername,
+				AuthHostname: s.User.AuthHostname,
+			}
+		}
+		if s.AuthOpt != nil {
+			ss.AuthOpt = &AuthOption{
+				ByAuthString: s.AuthOpt.ByAuthString,
+				AuthString:   s.AuthOpt.AuthString,
+				HashString:   s.AuthOpt.HashString,
+				AuthPlugin:   s.AuthOpt.AuthPlugin,
+			}
+		}
+		ss.IsRole = s.IsRole
+		grant.Users = append(grant.Users, ss)
+	}
+	grant.TLSOptions = make([]*TLSOption, 0, len(stmt.TLSOptions))
+	for _, t := range stmt.TLSOptions {
+		tt := &TLSOption{
+			Type:  t.Type,
+			Value: t.Value,
+		}
+		grant.TLSOptions = append(grant.TLSOptions, tt)
+	}
+	grant.WithGrant = stmt.WithGrant
+	ns = append(ns, grant)
 	return ns
 }
 
@@ -627,87 +599,89 @@ func (c *Canal) CatchMasterPos(timeout time.Duration) error {
 	return c.WaitUntilPos(pos, timeout)
 }
 
-type queryEventHandler func(*replication.BinlogEvent, *replication.QueryEvent,
-	ast.StmtNode, mysql.Position, *bool, *bool) (bool, error)
+// handleQueryEvent is handle some common query events (e.g., DDL,CREATE or DROP USER,GRANT),
+// others use UnknownQueryEvent unified callbacks to expose to users
+func (c *Canal) handleQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
+	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) error {
+	switch t := stmt.(type) {
+	case *ast.RenameTableStmt, *ast.AlterTableStmt, *ast.DropTableStmt, *ast.CreateTableStmt, *ast.TruncateTableStmt:
+		return c.handleDDLEvent(ev, e, t, pos, savePos, force)
+	case *ast.CreateUserStmt:
+		return c.handleCreateUserEvent(ev, e, t, pos, savePos, force)
+	case *ast.DropUserStmt:
+		return c.handleDropUserEvent(ev, e, t, pos, savePos, force)
+	case *ast.GrantStmt:
+		return c.handleGrantEvent(ev, e, t, pos, savePos, force)
+	default:
+		return c.handleUnknownQueryEvent(ev, e, t, pos, savePos, force)
+	}
+}
 
-func (c *Canal) handleTableEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
-	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) (bool, error) {
-	next := true
+func (c *Canal) handleDDLEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
+	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) error {
 	nodes := parseStmt(stmt)
 	for _, node := range nodes {
 		if node.db == "" {
 			node.db = string(e.Schema)
 		}
-		next = false
 		if err := c.updateTable(ev.Header, node.db, node.table); err != nil {
-			return next, errors.Trace(err)
+			return errors.Trace(err)
 		}
 	}
 	if len(nodes) > 0 {
 		*savePos = true
 		*force = true
-		next = false
 		// Now we only handle Table Changed DDL, maybe we will support more later.
 		if err := c.eventHandler.OnDDL(ev.Header, pos, e); err != nil {
-			return next, errors.Trace(err)
+			return errors.Trace(err)
 		}
 	}
-	return next, nil
+	return nil
 }
 
 func (c *Canal) handleCreateUserEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
-	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) (bool, error) {
-	next := true
+	stmt *ast.CreateUserStmt, pos mysql.Position, savePos, force *bool) error {
 	users := parseCreateUserStmt(stmt)
 	for _, user := range users {
 		*savePos = true
 		*force = true
-		next = false
 		if err := c.eventHandler.OnCreateUser(e, user); err != nil {
-			return next, errors.Trace(err)
+			return errors.Trace(err)
 		}
 	}
-
-	return next, nil
+	return nil
 }
 
 func (c *Canal) handleDropUserEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
-	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) (bool, error) {
-	next := true
+	stmt *ast.DropUserStmt, pos mysql.Position, savePos, force *bool) error {
 	users := parseDropUserStmt(stmt)
 	for _, user := range users {
 		*savePos = true
 		*force = true
-		next = false
 		if err := c.eventHandler.OnDropUser(e, user); err != nil {
-			return next, errors.Trace(err)
+			return errors.Trace(err)
 		}
 	}
-
-	return next, nil
+	return nil
 }
 
 func (c *Canal) handleGrantEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
-	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) (bool, error) {
-	next := true
+	stmt *ast.GrantStmt, pos mysql.Position, savePos, force *bool) error {
 	grants := parseGrantStmt(stmt)
 	for _, grant := range grants {
 		*savePos = true
 		*force = true
-		next = false
 		if err := c.eventHandler.OnGrant(e, grant); err != nil {
-			return next, errors.Trace(err)
+			return errors.Trace(err)
 		}
 	}
-
-	return next, nil
+	return nil
 }
 
 func (c *Canal) handleUnknownQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
-	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) (bool, error) {
-	next := false
+	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) error {
 	if err := c.eventHandler.OnQueryEvent(ev.Header, e); err != nil {
-		return next, errors.Trace(err)
+		return errors.Trace(err)
 	}
-	return next, nil
+	return nil
 }

@@ -641,7 +641,6 @@ func (c *Canal) handleDDLEvent(ev *replication.BinlogEvent, e *replication.Query
 
 func (c *Canal) handleCreateUserEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
 	stmt *ast.CreateUserStmt, pos mysql.Position, savePos, force *bool) error {
-
 	users := parseCreateUserStmt(stmt)
 	for _, user := range users {
 		*savePos = true
@@ -650,7 +649,6 @@ func (c *Canal) handleCreateUserEvent(ev *replication.BinlogEvent, e *replicatio
 			return errors.Trace(err)
 		}
 	}
-
 	return nil
 }
 

@@ -339,9 +339,7 @@ type Position struct {
 
 // handleQueryEvent is handle some common query events (e.g., DDL,CREATE or DROP USER,GRANT),
 // others use UnknownQueryEvent unified callbacks to expose to users
-func (c *Canal) handleQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
-	stmt ast.StmtNode, pos *Position) error {
-
+func (c *Canal) handleQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent, stmt ast.StmtNode, pos *Position) error {
 	switch t := stmt.(type) {
 	case *ast.RenameTableStmt, *ast.AlterTableStmt, *ast.DropTableStmt, *ast.CreateTableStmt, *ast.TruncateTableStmt:
 		return c.handleDDLEvent(ev, e, t, pos)
@@ -350,8 +348,7 @@ func (c *Canal) handleQueryEvent(ev *replication.BinlogEvent, e *replication.Que
 	}
 }
 
-func (c *Canal) handleDDLEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
-	stmt ast.StmtNode, pos *Position) error {
+func (c *Canal) handleDDLEvent(ev *replication.BinlogEvent, e *replication.QueryEvent, stmt ast.StmtNode, pos *Position) error {
 	nodes := parseStmt(stmt)
 	for _, node := range nodes {
 		if node.db == "" {

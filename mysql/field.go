@@ -41,50 +41,51 @@ const (
 	FieldValueTypeString
 )
 
-func (f *Field) Parse(p FieldData) (err error) {
+func (f *Field) Parse(p FieldData) error {
 	f.Data = p
 
 	var n int
+	var err error
 	pos := 0
 	//skip catelog, always def
 	n, err = SkipLengthEncodedString(p)
 	if err != nil {
-		return
+		return err
 	}
 	pos += n
 
 	//schema
 	f.Schema, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
-		return
+		return err
 	}
 	pos += n
 
 	//table
 	f.Table, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
-		return
+		return err
 	}
 	pos += n
 
 	//org_table
 	f.OrgTable, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
-		return
+		return err
 	}
 	pos += n
 
 	//name
 	f.Name, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
-		return
+		return err
 	}
 	pos += n
 
 	//org_name
 	f.OrgName, _, n, err = LengthEncodedString(p[pos:])
 	if err != nil {
-		return
+		return err
 	}
 	pos += n
 
@@ -123,7 +124,7 @@ func (f *Field) Parse(p FieldData) (err error) {
 
 		if pos+int(f.DefaultValueLength) > len(p) {
 			err = ErrMalformPacket
-			return
+			return err
 		}
 
 		//default value string[$len]

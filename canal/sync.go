@@ -142,22 +142,9 @@ func (c *Canal) runSyncBinlog() error {
 				continue
 			}
 			for _, stmt := range stmts {
-				nodes := parseStmt(stmt)
-				for _, node := range nodes {
-					if node.db == "" {
-						node.db = string(e.Schema)
-					}
-					if err = c.updateTable(ev.Header, node.db, node.table); err != nil {
-						return errors.Trace(err)
-					}
-				}
-				if len(nodes) > 0 {
-					savePos = true
-					force = true
-					// Now we only handle Table Changed DDL, maybe we will support more later.
-					if err = c.eventHandler.OnDDL(ev.Header, pos, e); err != nil {
-						return errors.Trace(err)
-					}
+				err := c.handleQueryEvent(ev, e, stmt, pos, &savePos, &force)
+				if err != nil {
+					c.cfg.Logger.Errorf("handle query event(%s) err %v", e.Query, err)
 				}
 			}
 			if savePos && e.GSet != nil {
@@ -335,4 +322,46 @@ func (c *Canal) CatchMasterPos(timeout time.Duration) error {
 	}
 
 	return c.WaitUntilPos(pos, timeout)
+}
+
+// handleQueryEvent is handle some common query events (e.g., DDL,CREATE or DROP USER,GRANT),
+// others use UnknownQueryEvent unified callbacks to expose to users
+func (c *Canal) handleQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
+	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) error {
+	switch t := stmt.(type) {
+	case *ast.RenameTableStmt, *ast.AlterTableStmt, *ast.DropTableStmt, *ast.CreateTableStmt, *ast.TruncateTableStmt:
+		return c.handleDDLEvent(ev, e, t, pos, savePos, force)
+	default:
+		return c.handleUnknownQueryEvent(ev, e, t, pos, savePos, force)
+	}
+}
+
+func (c *Canal) handleDDLEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
+	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) error {
+	nodes := parseStmt(stmt)
+	for _, node := range nodes {
+		if node.db == "" {
+			node.db = string(e.Schema)
+		}
+		if err := c.updateTable(ev.Header, node.db, node.table); err != nil {
+			return errors.Trace(err)
+		}
+	}
+	if len(nodes) > 0 {
+		*savePos = true
+		*force = true
+		// Now we only handle Table Changed DDL, maybe we will support more later.
+		if err := c.eventHandler.OnDDL(ev.Header, pos, e); err != nil {
+			return errors.Trace(err)
+		}
+	}
+	return nil
+}
+
+func (c *Canal) handleUnknownQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
+	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) error {
+	if err := c.eventHandler.OnQueryEvent(ev.Header, e); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
 }

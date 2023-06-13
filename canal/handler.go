@@ -3,6 +3,7 @@ package canal
 import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
+	"github.com/pingcap/tidb/parser/ast"
 )
 
 type EventHandler interface {
@@ -18,7 +19,7 @@ type EventHandler interface {
 	// OnPosSynced Use your own way to sync position. When force is true, sync position immediately.
 	OnPosSynced(header *replication.EventHeader, pos mysql.Position, set mysql.GTIDSet, force bool) error
 	// OnQueryEvent is query event include(create user,drop user,create index event,etd.)
-	OnQueryEvent(header *replication.EventHeader, queryEvent *replication.QueryEvent) error
+	OnQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent, stmt ast.StmtNode, pos mysql.Position, force bool) (bool, error)
 	String() string
 }
 
@@ -40,8 +41,9 @@ func (h *DummyEventHandler) OnGTID(*replication.EventHeader, mysql.GTIDSet) erro
 func (h *DummyEventHandler) OnPosSynced(*replication.EventHeader, mysql.Position, mysql.GTIDSet, bool) error {
 	return nil
 }
-func (h *DummyEventHandler) OnQueryEvent(header *replication.EventHeader, queryEvent *replication.QueryEvent) error {
-	return nil
+func (h *DummyEventHandler) OnQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
+	stmt ast.StmtNode, pos mysql.Position, force bool) (bool, error) {
+	return force, nil
 }
 func (h *DummyEventHandler) String() string { return "DummyEventHandler" }
 

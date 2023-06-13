@@ -360,8 +360,13 @@ func (c *Canal) handleDDLEvent(ev *replication.BinlogEvent, e *replication.Query
 
 func (c *Canal) handleUnknownQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent,
 	stmt ast.StmtNode, pos mysql.Position, savePos, force *bool) error {
-	if err := c.eventHandler.OnQueryEvent(ev.Header, e); err != nil {
+	f, err := c.eventHandler.OnQueryEvent(ev, e, stmt, pos, *force)
+	if err != nil {
 		return errors.Trace(err)
+	}
+	if f {
+		*savePos = true
+		*force = true
 	}
 	return nil
 }

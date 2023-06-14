@@ -147,9 +147,17 @@ func (c *Canal) runSyncBinlog() error {
 				Force:    force,
 			}
 			for _, stmt := range stmts {
-				err := c.handleQueryEvent(ev, e, stmt, posInfo)
-				if err != nil {
-					c.cfg.Logger.Errorf("handle query event(%s) err %v", e.Query, err)
+				nodes := parseDDLStmt(stmt)
+				if len(nodes) > 0 {
+					err := c.handleDDLEvent(ev, e, nodes, posInfo)
+					if err != nil {
+						c.cfg.Logger.Errorf("handle ddl event err %v", err)
+					}
+				} else {
+					err := c.handleQueryEvent(ev, e, stmt, posInfo)
+					if err != nil {
+						c.cfg.Logger.Errorf("handle query event err %v", err)
+					}
 				}
 			}
 			savePos = posInfo.SavePos
@@ -177,7 +185,7 @@ type node struct {
 	table string
 }
 
-func parseStmt(stmt ast.StmtNode) (ns []*node) {
+func parseDDLStmt(stmt ast.StmtNode) (ns []*node) {
 	switch t := stmt.(type) {
 	case *ast.RenameTableStmt:
 		for _, tableInfo := range t.TableToTables {
@@ -337,19 +345,8 @@ type Position struct {
 	Force   bool
 }
 
-// handleQueryEvent is handle some common query events (e.g., DDL,CREATE or DROP USER,GRANT),
-// others use UnknownQueryEvent unified callbacks to expose to users
-func (c *Canal) handleQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent, stmt ast.StmtNode, pos *Position) error {
-	switch t := stmt.(type) {
-	case *ast.RenameTableStmt, *ast.AlterTableStmt, *ast.DropTableStmt, *ast.CreateTableStmt, *ast.TruncateTableStmt:
-		return c.handleDDLEvent(ev, e, t, pos)
-	default:
-		return c.handleUnknownQueryEvent(ev, e, t, pos)
-	}
-}
-
-func (c *Canal) handleDDLEvent(ev *replication.BinlogEvent, e *replication.QueryEvent, stmt ast.StmtNode, pos *Position) error {
-	nodes := parseStmt(stmt)
+// handleDDLEvent is handle DDL event
+func (c *Canal) handleDDLEvent(ev *replication.BinlogEvent, e *replication.QueryEvent, nodes []*node, pos *Position) error {
 	for _, node := range nodes {
 		if node.db == "" {
 			node.db = string(e.Schema)
@@ -369,7 +366,9 @@ func (c *Canal) handleDDLEvent(ev *replication.BinlogEvent, e *replication.Query
 	return nil
 }
 
-func (c *Canal) handleUnknownQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent, stmt ast.StmtNode, pos *Position) error {
+// handleQueryEvent is handle some common query events (e.g., DDL,CREATE or DROP USER,GRANT)
+// DDL event use handleDDLEvent, others use the handleQueryEvent
+func (c *Canal) handleQueryEvent(ev *replication.BinlogEvent, e *replication.QueryEvent, stmt ast.StmtNode, pos *Position) error {
 	if err := c.eventHandler.OnQueryEvent(ev, e, stmt, pos); err != nil {
 		return errors.Trace(err)
 	}
